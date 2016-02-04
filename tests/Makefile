@@ -1,27 +1,31 @@
-
-ifeq ($(src),)
-	src := $$PWD
+ifeq ($(AMDP2P_ROOT),)
+SRC_DIR := $(PWD)
+else
+SRC_DIR := $(AMDP2P_ROOT)/tests
 endif
 
-
+# Developers could use 'make O=<path>' to redirect the build folder.
+ifneq ($(O),)
+# When the build folder doesn't contain a Makefile, kbuild will fail. Create
+# an empty Makefile
+BUILD_DIR := $(shell mkdir -p $(O) && cd $(O) && /usr/bin/touch Makefile \
+                     && /bin/pwd)
+else
+BUILD_DIR := $(SRC_DIR)
+endif
 
 ifneq ($(KERNELRELEASE),)
 # Specify default location of RDMA header
-RDMA_HEADER_DIR := $(ROOT_OF_ROOTS)/kernel/drivers/gpu/drm/amd/include
+RDMA_HEADER_DIR := $(KERNEL_ROOT)/drivers/gpu/drm/amd/include
 ifeq ("$(wildcard $(RDMA_HEADER_DIR)/amd_rdma.h)","")
-RDMA_HEADER_DIR := /usr/src/linux-headers-$(shell uname -r)/drivers/gpu/drm/amd/include
-ifeq ("$(wildcard $(RDMA_HEADER_DIR)/amd_rdma.h)","")
-$(error amd_rdma.h header is not found)
+$(error amd_rdma.h is not found. Use KERNEL_ROOT= to point to the kernel source)
 endif
-endif
-
-$(info INFO: RDMA Header directory is $(RDMA_HEADER_DIR))
 
 kver_major:=$(shell echo $(KERNELRELEASE) | awk -F '.' '// { print $$2;}' )
 
 obj-m += amdp2ptest.o
 
-ccflags-y += -I $(RDMA_HEADER_DIR)
+ccflags-y += -I$(RDMA_HEADER_DIR) -I$(SRC_DIR)/../include
 
 else
 
@@ -33,18 +37,25 @@ REL_MINOR  := $(word 3,$(REL))
 
 all: default
 
-
 default:
-	@ $(MAKE) -C $(KDIR) M=$$PWD  modules
+	@ $(MAKE) -C $(KDIR) M=$(BUILD_DIR) src=$(SRC_DIR)
 
 install:
-	$(MAKE) -C $(KDIR) M=$$PWD  modules_install
+	$(MAKE) -C $(KDIR) M=$(BUILD_DIR) modules_install
 
 help:
-	$(MAKE) -C $(KDIR) M=$$PWD help
+	$(MAKE) -C $(KDIR) M=$(SRC_DIR) help
 
-clean:
+clean: clean_extra
+	cd $(BUILD_DIR) && \
 	rm -rf *.o *.ko* *.mod.* .*.cmd Module.symvers modules.order .tmp_versions/ *~ core .depend TAGS
+
+ifeq ($(BUILD_DIR),$(SRC_DIR))
+clean_extra:
+else
+clean_extra:
+	rm -f $(BUILD_DIR)/Makefile
+endif
 
 TAGS:
 	find $(KERNELDIR) -follow -name \*.h -o -name \*.c  |xargs etags
