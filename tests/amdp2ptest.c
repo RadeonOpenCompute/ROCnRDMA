@@ -52,13 +52,14 @@ MODULE_VERSION("1.0");
 const struct amd_rdma_interface *rdma_interface;
 
 
-struct va_pages_node {
-	struct list_head node;
-	struct amd_p2p_page_table *pages;
+struct amdp2ptest_node {
+	struct list_head list_node;
+	struct amd_p2p_info *info;
+	struct mutex *lock;
 };
 
 
-struct amdp2ptest_pages_list {
+struct amdp2ptest_list {
 	struct list_head	head;
 	struct mutex	lock;
 };
@@ -73,43 +74,29 @@ struct amdp2ptest_pages_list {
 
 
 
-static void free_callback(struct amd_p2p_page_table *page_table,
-				void *client_priv)
+static void free_callback(void *client_priv)
 {
-	struct va_pages_node	      *va_pages = NULL;
-	struct amdp2ptest_pages_list *list = client_priv;
-	struct list_head *p, *n;
+	struct amdp2ptest_node *node = client_priv;
 
-	MSG_ERR("Free callback is called on va 0x%llx\n", page_table->va);
+	MSG_ERR("Free callback is called on va 0x%llx, size 0x%llx\n",
+			node->info->va, node->info->size);
 
-	list_for_each_safe(p, n, &list->head) {
-		va_pages = list_entry(p, struct va_pages_node, node);
+	mutex_lock(node->lock);
+	list_del(&node->list_node);
+	mutex_unlock(node->lock);
 
-		if (va_pages->pages == page_table) {
-			MSG_INFO("Found free page table to free\n");
-
-			mutex_lock(&list->lock);
-			list_del(&va_pages->node);
-			mutex_unlock(&list->lock);
-			kfree(va_pages);
-
-			/* Note: Do not break from loop to allow test
-			 * situation when "get_pages" would be called
-			 * on the same memory several times
-			 **/
-		}
-	}
+	kfree(node);
 }
 
 
 
 static int amdp2ptest_open(struct inode *inode, struct file *filp)
 {
-	struct amdp2ptest_pages_list *list;
+	struct amdp2ptest_list *list;
 
 	MSG_INFO("Open driver\n");
 
-	list = kmalloc(sizeof(struct amdp2ptest_pages_list), GFP_KERNEL);
+	list = kmalloc(sizeof(struct amdp2ptest_list), GFP_KERNEL);
 
 	if (!list) {
 		MSG_ERR("Can't alloc kernel memory to store list stucture\n");
@@ -127,30 +114,54 @@ static int amdp2ptest_open(struct inode *inode, struct file *filp)
 
 static int amdp2ptest_release(struct inode *inode, struct file *filp)
 {
-	struct va_pages_node	      *va_pages = NULL;
+	struct amdp2ptest_node *tmp, *node = NULL;
 	int retcode;
-	struct amdp2ptest_pages_list *list = filp->private_data;
-	struct list_head *p, *n;
+	struct amdp2ptest_list *list = filp->private_data;
 
 	MSG_INFO("Close driver\n");
 
-	list_for_each_safe(p, n, &list->head) {
-		va_pages = list_entry(p, struct va_pages_node, node);
-		MSG_INFO("Free pages: VA 0x%llx\n", va_pages->pages->va);
-		retcode = rdma_interface->put_pages(va_pages->pages);
+	list_for_each_entry_safe(node, tmp, &list->head, list_node) {
+		MSG_INFO("Free pages: VA 0x%llx\n", node->info->va);
+		retcode = rdma_interface->put_pages(&node->info);
 
 		if (retcode != 0)
 			MSG_ERR("Could not put pages back: %d\n", retcode);
 
 		mutex_lock(&list->lock);
-		list_del(&va_pages->node);
+		list_del(&node->list_node);
 		mutex_unlock(&list->lock);
-		kfree(va_pages);
+		kfree(node);
 	}
 
 	filp->private_data = NULL;
 	kfree(list);
 	return 0;
+}
+
+static int ioctl_is_gpu_address(struct file *filp, unsigned long arg)
+{
+	struct AMDRDMA_IOCTL_IS_GPU_ADDRESS_PARAM params = {0};
+
+	MSG_INFO("AMD2P2PTEST_IOCTL_IS_GPU_ADDRESS");
+
+	if (copy_from_user(&params, (void *)arg, sizeof(params))) {
+		MSG_ERR("copy_from_user failed on pointer %p\n",
+							(void *)arg);
+		return -EFAULT;
+	}
+
+	params.ret_value = rdma_interface->is_gpu_address(params.addr,
+				get_task_pid(current, PIDTYPE_PID));
+
+	if (copy_to_user((void *)arg, &params, sizeof(params))) {
+		MSG_ERR("copy_to_user failed on user pointer %p\n",
+						(void *)arg);
+
+		return -EFAULT;
+	}
+
+	return 0;
+
 }
 
 
@@ -195,11 +206,11 @@ static int ioctl_get_page_size(struct file *filp, unsigned long arg)
 
 static int ioctl_get_pages(struct file *filp, unsigned long arg)
 {
-	struct va_pages_node	      *va_pages = NULL;
-	struct amdp2ptest_pages_list *list = filp->private_data;
+	struct amdp2ptest_node *node = NULL;
+	struct amdp2ptest_list *list = filp->private_data;
 	struct AMDRDMA_IOCTL_GET_PAGES_PARAM params = {0};
 	int result;
-	struct amd_p2p_page_table  *pages;
+
 
 	MSG_INFO("AMD2P2PTEST_IOCTL_GET_PAGES");
 
@@ -209,17 +220,24 @@ static int ioctl_get_pages(struct file *filp, unsigned long arg)
 		return -EFAULT;
 	}
 
-
 	MSG_INFO("addr %llx, length %llx\n", params.addr, params.length);
+
+	node = kmalloc(sizeof(struct amdp2ptest_node), GFP_KERNEL);
+
+	if (node == 0) {
+		MSG_ERR("Can't alloc kernel memory\n");
+		return -ENOMEM;
+	}
+
+	memset(node, 0, sizeof(struct amdp2ptest_node));
+
+	node->lock = &list->lock;
 
 	result = rdma_interface->get_pages(params.addr, params.length,
 					get_task_pid(current, PIDTYPE_PID),
-					0, /* There is no dma_device for which
-					      to get pages -> no IOMMU support
-					      is needed */
-					&pages,
+					&node->info,
 					free_callback,
-					list /* Pointer to the list */
+					node /* Pointer to the list */
 					);
 
 	if (result) {
@@ -230,24 +248,12 @@ static int ioctl_get_pages(struct file *filp, unsigned long arg)
 	if (copy_to_user((void *)arg, &params, sizeof(params))) {
 		MSG_ERR("copy_to_user failed on user pointer %p\n",
 							(void *)arg);
-		rdma_interface->put_pages(pages);
+		rdma_interface->put_pages(&node->info);
 		return -EFAULT;
 	}
 
-
-	va_pages = kmalloc(sizeof(struct va_pages_node), GFP_KERNEL);
-
-	if (va_pages == 0) {
-		MSG_ERR("Can't alloc kernel memory\n");
-		rdma_interface->put_pages(pages);
-		return -ENOMEM;
-	}
-
-	memset(va_pages, 0, sizeof(struct va_pages_node));
-	va_pages->pages = pages;
-
 	mutex_lock(&list->lock);
-	list_add(&va_pages->node, &list->head);
+	list_add(&node->list_node, &list->head);
 	mutex_unlock(&list->lock);
 
 	return 0;
@@ -256,10 +262,9 @@ static int ioctl_get_pages(struct file *filp, unsigned long arg)
 
 static int ioctl_put_pages(struct file *filp, unsigned long arg)
 {
-	struct va_pages_node	      *va_pages = NULL;
-	struct amdp2ptest_pages_list *list = filp->private_data;
+	struct amdp2ptest_node *tmp, *node;
+	struct amdp2ptest_list *list = filp->private_data;
 	struct AMDRDMA_IOCTL_PUT_PAGES_PARAM params = {0};
-	struct list_head *p, *n;
 	int retcode;
 
 	MSG_INFO("AMD2P2PTEST_IOCTL_PUT_PAGES");
@@ -273,13 +278,11 @@ static int ioctl_put_pages(struct file *filp, unsigned long arg)
 	MSG_INFO("addr %llx, length %llx\n", params.addr, params.length);
 
 
-	list_for_each_safe(p, n, &list->head) {
-		va_pages = list_entry(p, struct va_pages_node, node);
+	list_for_each_entry_safe(node, tmp, &list->head, list_node) {
+		if (node->info->va == params.addr &&
+			node->info->size == params.length) {
 
-		if (va_pages->pages->va == params.addr &&
-			va_pages->pages->size == params.length) {
-
-			retcode = rdma_interface->put_pages(va_pages->pages);
+			retcode = rdma_interface->put_pages(&node->info);
 
 			if (retcode != 0) {
 				MSG_ERR("Could not put pages back: %d\n",
@@ -287,9 +290,9 @@ static int ioctl_put_pages(struct file *filp, unsigned long arg)
 			}
 
 			mutex_lock(&list->lock);
-			list_del(&va_pages->node);
+			list_del(&node->list_node);
 			mutex_unlock(&list->lock);
-			kfree(va_pages);
+			kfree(node);
 			/* Note: Do not break from loop to allow test
 			 * situation when "get_pages" would be called
 			 * on the same memory several times
@@ -308,6 +311,7 @@ static const struct ioctl_handler_map {
 	{ ioctl_get_page_size,	AMD2P2PTEST_IOCTL_GET_PAGE_SIZE },
 	{ ioctl_get_pages,	AMD2P2PTEST_IOCTL_GET_PAGES	},
 	{ ioctl_put_pages,	AMD2P2PTEST_IOCTL_PUT_PAGES	},
+	{ ioctl_is_gpu_address,	AMD2P2PTEST_IOCTL_IS_GPU_ADDRESS },
 	{ NULL, 0 }
 };
 
@@ -333,25 +337,19 @@ static int amdp2ptest_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	int i;
 	struct scatterlist *sg;
-	struct va_pages_node	      *va_pages = NULL;
-	struct amdp2ptest_pages_list *list = filp->private_data;
+	struct amdp2ptest_node *tmp, *node;
+	struct amdp2ptest_list *list = filp->private_data;
 	size_t size = vma->vm_end - vma->vm_start;
-	struct list_head *p, *n;
 	uint64_t gpu_va = vma->vm_pgoff << PAGE_SHIFT;
+	uint64_t start_addr;
 
 	MSG_INFO("Mapping to CPU user space\n");
-	MSG_INFO("Begin vm_end 0x%lx, vm_start 0x%lx\n", vma->vm_end,
-		    vma->vm_start);
+	MSG_INFO("Begin vm_start 0x%lx, vm_end 0x%lx\n", vma->vm_start,
+			vma->vm_end);
 	MSG_INFO("vm_pgoff / pfn 0x%lx\n", vma->vm_pgoff);
 	MSG_INFO("gpu_va / phys. address 0x%llx\n", gpu_va);
 
-	if (size != PAGE_SIZE) {
-		MSG_ERR("Mapping works now only per page size=%ld", PAGE_SIZE);
-		return -EINVAL;
-	}
-
-	/* This is the first very simple version of getting CPU pointer for
-	* the single page.
+	/*
 	* The logic is the following:
 	*	- We get GPU VA address and enumerate list to find "get_pages"
 	*	  node  for such range
@@ -360,36 +358,35 @@ static int amdp2ptest_mmap(struct file *filp, struct vm_area_struct *vma)
 	* NOTE/TODO: Assumption is that the page size is 4KB to allow testing
 	* of the basic logic. Eventually more complex logic must be added.
 	*/
-	list_for_each_safe(p, n, &list->head) {
-		va_pages = list_entry(p, struct va_pages_node, node);
-
-		if (va_pages->pages->va >= gpu_va  &&
-		    (va_pages->pages->va + va_pages->pages->size)
-								< vma->vm_end) {
+	list_for_each_entry_safe(node, tmp, &list->head, list_node) {
+		if (node->info->va >= gpu_va  &&
+		    (node->info->va + node->info->size) <= gpu_va + size) {
 
 			MSG_INFO("Found node: va=0x%llx,size=0x%llx,nents %d\n",
-					va_pages->pages->va,
-					va_pages->pages->size,
-					va_pages->pages->pages->nents);
+					node->info->va,
+					node->info->size,
+					node->info->pages->nents);
 
-			for_each_sg(va_pages->pages->pages->sgl, sg,
-					va_pages->pages->pages->nents, i) {
-				if (va_pages->pages->va + (i * sg->length) ==
-						gpu_va) {
+			start_addr = vma->vm_start;
+
+			for_each_sg(node->info->pages->sgl, sg,
+					node->info->pages->nents, i) {
 
 					MSG_INFO("Found page[%d]: dma 0x%llx\n",
 							i, sg->dma_address);
 
 					if (remap_pfn_range(vma,
-							vma->vm_start,
-							sg->dma_address,
+							start_addr,
+							sg->dma_address >> PAGE_SHIFT,
 							size,
 							vma->vm_page_prot)) {
 						MSG_ERR("Failed remap_pfn()\n");
 						return -EINVAL;
 					}
+
+					start_addr += sg->length;
+
 					return 0;
-				}
 			}
 		}
 	}

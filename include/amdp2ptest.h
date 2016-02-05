@@ -43,11 +43,6 @@ struct AMDRDMA_IOCTL_GET_PAGES_PARAM {
 	/* Input parameters */
 	uint64_t addr;
 	uint64_t length;
-	uint64_t is_local;	/* 1 if this is the pointer to local
-				   allocation */
-
-	/* Output parameters */
-	uint64_t cpu_ptr;
 };
 
 
@@ -55,6 +50,12 @@ struct AMDRDMA_IOCTL_PUT_PAGES_PARAM {
 	/* Input parameters */
 	uint64_t addr;
 	uint64_t length;
+};
+
+struct AMDRDMA_IOCTL_IS_GPU_ADDRESS_PARAM {
+	/* Input parameters */
+	uint64_t addr;
+	uint64_t ret_value;
 };
 
 
@@ -66,6 +67,9 @@ _IOWR(AMDP2PTEST_IOCTL_MAGIC, 2, struct AMDRDMA_IOCTL_GET_PAGES_PARAM *)
 
 #define AMD2P2PTEST_IOCTL_PUT_PAGES	\
 _IOW(AMDP2PTEST_IOCTL_MAGIC, 3, struct AMDRDMA_IOCTL_PUT_PAGES_PARAM *)
+
+#define AMD2P2PTEST_IOCTL_IS_GPU_ADDRESS	\
+_IOW(AMDP2PTEST_IOCTL_MAGIC, 4, struct AMDRDMA_IOCTL_IS_GPU_ADDRESS *)
 
 
 #endif  /* AMDP2PTEST_H */
