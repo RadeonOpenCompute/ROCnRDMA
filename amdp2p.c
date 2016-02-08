@@ -53,6 +53,8 @@ MODULE_DESCRIPTION("AMD P2P Bridge Driver for PeerDirect interface");
 MODULE_VERSION(AMD_PEER_BRIDGE_DRIVER_VERSION);
 
 
+#define MSG_DBG(fmt, args ...)	\
+			 pr_debug(fmt, ## args)
 #define MSG_INFO(fmt, args ...)	\
 			 pr_info(AMD_PEER_BRIDGE_DRIVER_NAME ": " fmt, ## args)
 #define MSG_ERR(fmt, args ...)	\
@@ -72,25 +74,26 @@ struct amd_mem_context {
 	uint64_t	size;
 	struct pid	*pid;
 
-	struct amd_p2p_page_table *alloc_page_table;
+	struct amd_p2p_info  *p2p_info;
 
 	/* Context received from PeerDirect call */
 	void *core_context;
 };
 
 
-static void free_callback(struct amd_p2p_page_table *page_table,
-		void *client_priv)
+static void free_callback(void *client_priv)
 {
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_priv;
 
-	MSG_INFO("free_callback: data 0x%p\n", mem_context);
+	MSG_DBG("free_callback: data 0x%p\n", mem_context);
 
 	if (!mem_context) {
 		MSG_WARN("free_callback: Invalid client context");
 		return;
 	}
+
+	MSG_DBG("mem_context->core_context 0x%p\n", mem_context->core_context);
 
 	/* Call back IB stack asking to invalidate memory */
 	(*ib_invalidate_callback) (ib_reg_handle, mem_context->core_context);
@@ -108,18 +111,19 @@ static int amd_acquire(unsigned long addr, size_t size,
 	/* Get pointer to structure describing current process */
 	pid = get_task_pid(current, PIDTYPE_PID);
 
-	MSG_INFO("acquire: addr:0x%lx,size:0x%x, pid 0x%p\n",
+	MSG_DBG("acquire: addr:0x%lx,size:0x%x, pid 0x%p\n",
 					addr, (unsigned int)size, pid);
 
 	/* Check if it is address handled by AMD GPU driver */
 	ret = rdma_interface->is_gpu_address(addr, pid);
 
 	if (ret) {
+		MSG_DBG("acquire: Not GPU Address\n");
 		/* This is not GPU address */
 		return 0;
 	}
 
-	MSG_INFO("acquire: GPU address\n");
+	MSG_DBG("acquire: GPU address\n");
 
 	/* Initialize context used for operation with given address */
 	mem_context = kzalloc(sizeof(struct amd_mem_context), GFP_KERNEL);
@@ -158,7 +162,7 @@ static int amd_get_pages(unsigned long addr, size_t size, int write, int force,
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_INFO("get_pages: addr:0x%lx,size:0x%x\n",
+	MSG_DBG("get_pages: addr:0x%lx,size:0x%x\n",
 						addr, (unsigned int)size);
 
 	if (!mem_context) {
@@ -166,7 +170,7 @@ static int amd_get_pages(unsigned long addr, size_t size, int write, int force,
 		return -EINVAL;
 	}
 
-	MSG_INFO("get_pages: pid :0x%p\n", mem_context->pid);
+	MSG_DBG("get_pages: pid :0x%p\n", mem_context->pid);
 
 
 	if (addr != mem_context->va) {
@@ -184,12 +188,11 @@ static int amd_get_pages(unsigned long addr, size_t size, int write, int force,
 	ret = rdma_interface->get_pages(addr,
 					size,
 					mem_context->pid,
-					NULL,/* dma device */
-					&mem_context->alloc_page_table,
+					&mem_context->p2p_info,
 					free_callback,
 					mem_context);
 
-	if (ret || !mem_context->alloc_page_table) {
+	if (ret || !mem_context->p2p_info) {
 		MSG_ERR("Could not rdma::get_pages failure: %d", ret);
 		return ret;
 	}
@@ -198,6 +201,7 @@ static int amd_get_pages(unsigned long addr, size_t size, int write, int force,
 
 	return 0;
 }
+
 
 static int amd_dma_map(struct sg_table *sg_head, void *client_context,
 			struct device *dma_device, int dmasync, int *nmap)
@@ -224,26 +228,26 @@ static int amd_dma_map(struct sg_table *sg_head, void *client_context,
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_INFO("dma_map: Context 0x%p, sg_table 0x%p\n",
+	MSG_DBG("dma_map: Context 0x%p, sg_table 0x%p\n",
 			client_context, sg_head);
 
-	MSG_INFO("dma_map: pid 0x%p, address 0x%llx, size:0x%llx\n",
+	MSG_DBG("dma_map: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
 			mem_context->size);
-	MSG_INFO("dma_map: sg_head: 0x%p\n", sg_head);
+	MSG_DBG("dma_map: sg_head: 0x%p\n", sg_head);
 
 
-	if (mem_context->alloc_page_table) {
+	if (mem_context->p2p_info) {
 		MSG_ERR("dma_map: No sg table were allocated\n");
 		return -EINVAL;
 	}
 
 	/* Copy information about previosly allocate sg_table */
-	*sg_head = *mem_context->alloc_page_table->pages;
+	*sg_head = *mem_context->p2p_info->pages;
 
 	/* Return number of pages */
-	*nmap = mem_context->alloc_page_table->pages->nents;
+	*nmap = mem_context->p2p_info->pages->nents;
 
 	return 0;
 }
@@ -254,10 +258,10 @@ static int amd_dma_unmap(struct sg_table *sg_head, void *client_context,
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_INFO("dma_unmap: Context 0x%p, sg_table 0x%p\n",
+	MSG_DBG("dma_unmap: Context 0x%p, sg_table 0x%p\n",
 			client_context, sg_head);
 
-	MSG_INFO("dma_unmap: pid 0x%p, address 0x%llx, size:0x%llx\n",
+	MSG_DBG("dma_unmap: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
 			mem_context->size);
@@ -271,18 +275,19 @@ static void amd_put_pages(struct sg_table *sg_head, void *client_context)
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_INFO("put_pages: client_context: 0x%p\n", client_context);
-	MSG_INFO("put_page_size: pid 0x%p, address 0x%llx, size:0x%llx\n",
+	MSG_DBG("put_pages: client_context: 0x%p\n", client_context);
+	MSG_DBG("put_page_size: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
 			mem_context->size);
 
-	ret = rdma_interface->put_pages(mem_context->alloc_page_table);
+	ret = rdma_interface->put_pages(&mem_context->p2p_info);
+
+	mem_context->p2p_info = NULL;
 
 	if (ret)
-		MSG_ERR("Could not rdma::get_pages failure: %d", ret);
+		MSG_ERR("put_pages failure: %d", ret);
 
-	mem_context->alloc_page_table = NULL;
 }
 static unsigned long amd_get_page_size(void *client_context)
 {
@@ -291,8 +296,8 @@ static unsigned long amd_get_page_size(void *client_context)
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_INFO("get_page_size: %p\n", client_context);
-	MSG_INFO("get_page_size: pid 0x%p, address 0x%llx, size:0x%llx\n",
+	MSG_DBG("get_page_size: %p\n", client_context);
+	MSG_DBG("get_page_size: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
 			mem_context->size);
@@ -320,8 +325,8 @@ static void amd_release(void *client_context)
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_INFO("release: Context: 0x%p\n", client_context);
-	MSG_INFO("release: pid 0x%p, address 0x%llx, size:0x%llx\n",
+	MSG_DBG("release: Context: 0x%p\n", client_context);
+	MSG_DBG("release: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
 			mem_context->size);
