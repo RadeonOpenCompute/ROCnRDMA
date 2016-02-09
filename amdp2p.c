@@ -37,6 +37,7 @@
 #include <linux/mm.h>
 #include <linux/io.h>
 #include <linux/uaccess.h>
+#include <linux/sched.h>
 
 
 
@@ -117,7 +118,7 @@ static int amd_acquire(unsigned long addr, size_t size,
 	/* Check if it is address handled by AMD GPU driver */
 	ret = rdma_interface->is_gpu_address(addr, pid);
 
-	if (ret) {
+	if (!ret) {
 		MSG_DBG("acquire: Not GPU Address\n");
 		/* This is not GPU address */
 		return 0;
