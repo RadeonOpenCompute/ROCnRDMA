@@ -77,6 +77,9 @@ struct amd_mem_context {
 
 	struct amd_p2p_info  *p2p_info;
 
+	/* Flag that free callback was called */
+	int free_callback_called;
+
 	/* Context received from PeerDirect call */
 	void *core_context;
 };
@@ -98,6 +101,11 @@ static void free_callback(void *client_priv)
 
 	/* Call back IB stack asking to invalidate memory */
 	(*ib_invalidate_callback) (ib_reg_handle, mem_context->core_context);
+
+	/* amdkfd will freed resources when we returned from this callback.
+	 * Set flag to inform that there is nothing to do on "put_pages", etc.
+	 */
+	ACCESS_ONCE(mem_context->free_callback_called) = 1;
 }
 
 
@@ -135,6 +143,7 @@ static int amd_acquire(unsigned long addr, size_t size,
 		return 0;
 	}
 
+	mem_context->free_callback_called = 0;
 	mem_context->va   = addr;
 	mem_context->size = size;
 
@@ -142,6 +151,8 @@ static int amd_acquire(unsigned long addr, size_t size,
 	 * called in the correct process context as opposite to others.
 	 */
 	mem_context->pid  = pid;
+
+	MSG_DBG("acquire: Client context %p\n", mem_context);
 
 	/* Return pointer to allocated context */
 	*client_context = mem_context;
@@ -199,7 +210,6 @@ static int amd_get_pages(unsigned long addr, size_t size, int write, int force,
 	}
 
 	/* Note: At this stage it is OK not to fill sg_table */
-
 	return 0;
 }
 
@@ -221,7 +231,7 @@ static int amd_dma_map(struct sg_table *sg_head, void *client_context,
 	 *	deal with local/device memory addresses (it requires "struct
 	 *	page").
 	 *
-	 *	Accordingly there return assumption that iommu funcutionality
+	 *	Accordingly there return is assumption that iommu funcutionality
 	 *	should be disabled so we could assume that sg_table already
 	 *	contains DMA addresses.
 	 *
@@ -238,8 +248,7 @@ static int amd_dma_map(struct sg_table *sg_head, void *client_context,
 			mem_context->size);
 	MSG_DBG("dma_map: sg_head: 0x%p\n", sg_head);
 
-
-	if (mem_context->p2p_info) {
+	if (!mem_context->p2p_info) {
 		MSG_ERR("dma_map: No sg table were allocated\n");
 		return -EINVAL;
 	}
@@ -249,6 +258,8 @@ static int amd_dma_map(struct sg_table *sg_head, void *client_context,
 
 	/* Return number of pages */
 	*nmap = mem_context->p2p_info->pages->nents;
+
+	MSG_DBG("dma_map: sg_head: 0x%p\n", sg_head);
 
 	return 0;
 }
@@ -276,19 +287,30 @@ static void amd_put_pages(struct sg_table *sg_head, void *client_context)
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_DBG("put_pages: client_context: 0x%p\n", client_context);
-	MSG_DBG("put_page_size: pid 0x%p, address 0x%llx, size:0x%llx\n",
+	MSG_DBG("put_pages: sg_head %p client_context: 0x%p\n",
+			sg_head, client_context);
+	MSG_DBG("put_pages: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
 			mem_context->size);
 
-	ret = rdma_interface->put_pages(&mem_context->p2p_info);
+	MSG_DBG("put_pages: mem_context->p2p_info %p\n",
+				mem_context->p2p_info);
 
-	mem_context->p2p_info = NULL;
+	if (ACCESS_ONCE(mem_context->free_callback_called)) {
+		MSG_DBG("put_pages: free callback was called\n");
+		return;
+	}
 
-	if (ret)
-		MSG_ERR("put_pages failure: %d", ret);
+	if (mem_context->p2p_info) {
+		ret = rdma_interface->put_pages(&mem_context->p2p_info);
+		mem_context->p2p_info = NULL;
 
+		if (ret)
+			MSG_ERR("put_pages failure: %d (callback status %d)",
+					ret, mem_context->free_callback_called);
+	} else
+		MSG_ERR("put_pages: Pointer to p2p info is null\n");
 }
 static unsigned long amd_get_page_size(void *client_context)
 {
