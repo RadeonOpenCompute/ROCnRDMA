@@ -14,6 +14,10 @@ ifeq ($(src),)
 endif
 
 
+OFED_SYMBOLS=$(OFA_KERNEL_DIR)/Module.symvers
+KBUILD_EXTRA_SYMBOLS=$(OFED_SYMBOLS)
+
+
 ifneq ($(KERNELRELEASE),)
 
 # Specify default location of RDMA header
@@ -38,7 +42,6 @@ ccflags-y += -I$(OFA_KERNEL_DIR)/include/
 all: default
 
 default:
-	cp -rf $(OFA_KERNEL_DIR)/Module.symvers .
 	@ $(MAKE) -C $(KDIR) M=$$PWD  modules
 
 
@@ -53,7 +56,6 @@ REL_MINOR  := $(word 3,$(REL))
 all: default
 
 default:
-	cp -rf $(OFA_KERNEL_DIR)/Module.symvers .
 	@ $(MAKE) -C $(KDIR) M=$$PWD  modules
 
 install:
