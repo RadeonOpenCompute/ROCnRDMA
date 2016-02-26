@@ -20,13 +20,9 @@ KBUILD_EXTRA_SYMBOLS=$(OFED_SYMBOLS)
 
 ifneq ($(KERNELRELEASE),)
 
-# Specify default location of RDMA header
-RDMA_HEADER_DIR := $(ROOT_OF_ROOTS)/kernel/drivers/gpu/drm/amd/include
-ifeq ("$(wildcard $(RDMA_HEADER_DIR)/amd_rdma.h)","")
-RDMA_HEADER_DIR := /usr/src/linux-headers-$(shell uname -r)/drivers/gpu/drm/amd/include
+RDMA_HEADER_DIR := /usr/src/linux-headers-$(shell uname -r)/include/drm
 ifeq ("$(wildcard $(RDMA_HEADER_DIR)/amd_rdma.h)","")
 $(error amd_rdma.h header is not found)
-endif
 endif
 
 $(info INFO: AMD RDMA Header location is $(RDMA_HEADER_DIR))

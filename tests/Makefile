@@ -15,11 +15,15 @@ BUILD_DIR := $(SRC_DIR)
 endif
 
 ifneq ($(KERNELRELEASE),)
-# Specify default location of RDMA header
-RDMA_HEADER_DIR := $(KERNEL_ROOT)/drivers/gpu/drm/amd/include
+# Specify default location of RDM header
+RDMA_HEADER_DIR := $(KERNEL_ROOT)/include/drm
 ifeq ("$(wildcard $(RDMA_HEADER_DIR)/amd_rdma.h)","")
-$(error amd_rdma.h is not found. Use KERNEL_ROOT= to point to the kernel source)
+RDMA_HEADER_DIR := /usr/src/linux-headers-$(shell uname -r)/include/drm
+ifeq ("$(wildcard $(RDMA_HEADER_DIR)/amd_rdma.h)","")
+$(error amd_rdma.h header is not found. Use KERNEL_ROOT= to point to the kernel source)
 endif
+endif
+
 
 kver_major:=$(shell echo $(KERNELRELEASE) | awk -F '.' '// { print $$2;}' )
 
