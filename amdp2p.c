@@ -174,8 +174,8 @@ static int amd_get_pages(unsigned long addr, size_t size, int write, int force,
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_DBG("get_pages: addr:0x%lx,size:0x%x\n",
-						addr, (unsigned int)size);
+	MSG_DBG("get_pages: addr:0x%lx,size:0x%x, core_context:%p\n",
+						addr, (unsigned int)size, core_context);
 
 	if (!mem_context) {
 		MSG_WARN("get_pages: Invalid client context");
@@ -209,6 +209,8 @@ static int amd_get_pages(unsigned long addr, size_t size, int write, int force,
 		return ret;
 	}
 
+	mem_context->core_context = core_context;
+
 	/* Note: At this stage it is OK not to fill sg_table */
 	return 0;
 }
@@ -239,14 +241,13 @@ static int amd_dma_map(struct sg_table *sg_head, void *client_context,
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_DBG("dma_map: Context 0x%p, sg_table 0x%p\n",
+	MSG_DBG("dma_map: Context 0x%p, sg_head 0x%p\n",
 			client_context, sg_head);
 
 	MSG_DBG("dma_map: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
 			mem_context->size);
-	MSG_DBG("dma_map: sg_head: 0x%p\n", sg_head);
 
 	if (!mem_context->p2p_info) {
 		MSG_ERR("dma_map: No sg table were allocated\n");
@@ -258,8 +259,6 @@ static int amd_dma_map(struct sg_table *sg_head, void *client_context,
 
 	/* Return number of pages */
 	*nmap = mem_context->p2p_info->pages->nents;
-
-	MSG_DBG("dma_map: sg_head: 0x%p\n", sg_head);
 
 	return 0;
 }
@@ -319,7 +318,7 @@ static unsigned long amd_get_page_size(void *client_context)
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_DBG("get_page_size: %p\n", client_context);
+	MSG_DBG("get_page_size: context: %p\n", client_context);
 	MSG_DBG("get_page_size: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
@@ -348,7 +347,7 @@ static void amd_release(void *client_context)
 	struct amd_mem_context *mem_context =
 		(struct amd_mem_context *)client_context;
 
-	MSG_DBG("release: Context: 0x%p\n", client_context);
+	MSG_DBG("release: context: 0x%p\n", client_context);
 	MSG_DBG("release: pid 0x%p, address 0x%llx, size:0x%llx\n",
 			mem_context->pid,
 			mem_context->va,
