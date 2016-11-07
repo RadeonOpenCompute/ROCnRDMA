@@ -1,3 +1,14 @@
+## This repository is obsolete
+
+There is no need to use this driver anymore as support for PeerDirect was
+integrated directly in amdkfd kernel driver. PeerDirect support (with the same
+restrictions) will be enabled automatically on detection of PeerDirect API.
+
+The source is only left to serve as example of using AMD
+ROCmRDMA API.
+
+--------------------------
+
 ### Peer-to-Peer bridge driver for PeerDirect
 
 This is the kernel mode driver which provides a direct P2P path between the GPU memory
