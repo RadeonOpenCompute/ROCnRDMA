@@ -61,7 +61,7 @@ directory ('/usr/src/linux-headers-$(shell uname -r)'):
 #### Known issues and restrictions
 
 - Only 64-bit applications are supported
-- Memory PCI BAR for AMD GPU must be configured below 40-bit
+- Memory PCI BAR for AMD GPU must be configured below [64:40] in MMIO Range for GFX8 based GPU's.  GFX9/Vega can be configured [64:44] in the MMIO Range. 
 - IB Verbs interface must be used for communication with network stack.
 
 ##### Recommendation
