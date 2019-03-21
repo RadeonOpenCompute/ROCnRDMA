@@ -1,4 +1,6 @@
-### Peer-to-Peer bridge driver for PeerDirect
+### Peer-to-Peer bridge driver for PeerDirect - Deprecated Repo
+
+#### This is now included as part of the [ROCK Kernel Driver](https://github.com/RadeonOpenCompute/ROCK-Kernel-Driver)
 
 This is the kernel mode driver which provides a direct P2P path between the GPU memory
 and HCA device supporting PeerDirect interface from Mellanox.
